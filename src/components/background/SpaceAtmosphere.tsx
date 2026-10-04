@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useEvahStore } from '../../store/useEvahStore';
+import { ttsService } from '../../services/tts/ttsService';
 
 export const SpaceAtmosphere: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -8,6 +9,13 @@ export const SpaceAtmosphere: React.FC = () => {
   
   const backgroundIntensity = useEvahStore((state) => state.backgroundIntensity);
   const reducedMotion = useEvahStore((state) => state.reducedMotion);
+  const blackHoleState = useEvahStore((state) => state.blackHoleState);
+
+  // Keep ref of blackHoleState to avoid re-creating Three.js scene on every state change
+  const stateRef = useRef(blackHoleState);
+  useEffect(() => {
+    stateRef.current = blackHoleState;
+  }, [blackHoleState]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -49,7 +57,7 @@ export const SpaceAtmosphere: React.FC = () => {
     scene.add(group);
 
     // 1. Black Hole Core (Event Horizon - absorbs all light, significantly larger scale)
-    const coreGeo = new THREE.SphereGeometry(3.2, 48, 48);
+    const coreGeo = new THREE.SphereGeometry(3.4, 48, 48);
     const coreMat = new THREE.MeshBasicMaterial({
       color: 0x030407,
     });
@@ -57,7 +65,7 @@ export const SpaceAtmosphere: React.FC = () => {
     group.add(core);
 
     // 2. Accretion Disc Inner Rim Glow (Perplexity Comet inspired delicate rim)
-    const innerRingGeo = new THREE.RingGeometry(3.22, 4.2, 80);
+    const innerRingGeo = new THREE.RingGeometry(3.42, 4.45, 80);
     const innerRingMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -91,7 +99,7 @@ export const SpaceAtmosphere: React.FC = () => {
 
     // 3. Vast Gravitational Atmosphere / Outer Accretion Disc (Faint periwinkle / deep indigo)
     // Expanded diameter to occupy a large portion of the screen
-    const outerRingGeo = new THREE.RingGeometry(4.0, 11.2, 80);
+    const outerRingGeo = new THREE.RingGeometry(4.2, 12.0, 80);
     const outerRingMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -124,7 +132,7 @@ export const SpaceAtmosphere: React.FC = () => {
     group.add(outerRing);
 
     // 4. Subtle Gravitational Lens Halo (Direct face-on ethereal rim glow)
-    const haloGeo = new THREE.PlaneGeometry(8.5, 8.5);
+    const haloGeo = new THREE.PlaneGeometry(9.2, 9.2);
     const haloMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -157,13 +165,13 @@ export const SpaceAtmosphere: React.FC = () => {
     halo.position.set(0, 0, 0);
     group.add(halo);
 
-    // 5. Very Sparse Celestial Dust (Only 36 points, very faint, slow orbital drift)
+    // 5. Very Sparse Celestial Dust (Only 36 points, faint, slow orbital drift)
     const particleCount = 36;
     const particlePositions = new Float32Array(particleCount * 3);
     const particleAlphas = new Float32Array(particleCount);
 
     for (let i = 0; i < particleCount; i++) {
-      const radius = 4.5 + Math.random() * 9.0;
+      const radius = 4.8 + Math.random() * 9.5;
       const angle = Math.random() * Math.PI * 2;
       const height = (Math.random() - 0.5) * 1.6;
 
@@ -227,16 +235,51 @@ export const SpaceAtmosphere: React.FC = () => {
 
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
 
-    // Render loop state
+    // Render loop and two-phase settling state
     let animationFrameId: number | null = null;
     let isTabVisible = !document.hidden;
+    
+    // Smooth transition scalar (1.0 = normal/active, 0.25 = locked/disconnected)
+    let activeVisualMultiplier = 1.0;
+    let targetVisualMultiplier = 1.0;
+    let settlingTimer: number | null = null;
+    let isSettledPaused = false;
 
     const render = () => {
+      const currentState = stateRef.current;
+      const isLockedOrDisconnected = currentState === 'locked' || currentState === 'disconnected';
+
+      if (isLockedOrDisconnected) {
+        targetVisualMultiplier = 0.25;
+      } else {
+        targetVisualMultiplier = 1.0;
+      }
+
+      // Smooth lerp of visual multiplier
+      activeVisualMultiplier += (targetVisualMultiplier - activeVisualMultiplier) * 0.08;
+
+      // Direct polling of TTS intensity inside RAF (ZERO React/Zustand re-renders)
+      const audioIntensity = ttsService.getCurrentIntensity();
+
+      // Dynamic reactive modulation
+      const baseInner = (backgroundIntensity / 100) * 0.42 * activeVisualMultiplier;
+      const baseOuter = (backgroundIntensity / 100) * 0.24 * activeVisualMultiplier;
+      const baseHalo = (backgroundIntensity / 100) * 0.28 * activeVisualMultiplier;
+
+      innerRingMat.uniforms.uIntensity.value = baseInner + (audioIntensity * 0.25);
+      outerRingMat.uniforms.uIntensity.value = baseOuter + (audioIntensity * 0.12);
+      haloMat.uniforms.uIntensity.value = baseHalo + (audioIntensity * 0.18);
+
+      // Subtle scale pulse during speech
+      const scaleMultiplier = 1.0 + (audioIntensity * 0.035);
+      innerRing.scale.set(scaleMultiplier, scaleMultiplier, scaleMultiplier);
+
       if (shouldAnimate) {
-        // Very slow majestic movement
-        innerRing.rotation.z += 0.00025;
-        outerRing.rotation.z += 0.00015;
-        particles.rotation.y += 0.0002;
+        // Very slow majestic movement (dampened when locked/disconnected)
+        const speed = isLockedOrDisconnected ? 0.2 : 1.0;
+        innerRing.rotation.z += 0.00025 * speed;
+        outerRing.rotation.z += 0.00015 * speed;
+        particles.rotation.y += 0.0002 * speed;
 
         currentRotY += (targetRotY - currentRotY) * 0.03;
         currentRotX += (targetRotX - currentRotX) * 0.03;
@@ -246,18 +289,56 @@ export const SpaceAtmosphere: React.FC = () => {
 
       renderer.render(scene, camera);
 
-      if (shouldAnimate && isTabVisible) {
+      // Check if settled into locked/disconnected state after ~400ms
+      if (isLockedOrDisconnected && Math.abs(activeVisualMultiplier - targetVisualMultiplier) < 0.02) {
+        if (!settlingTimer && !isSettledPaused) {
+          settlingTimer = window.setTimeout(() => {
+            isSettledPaused = true;
+            if (animationFrameId) {
+              cancelAnimationFrame(animationFrameId);
+              animationFrameId = null;
+            }
+          }, 400);
+        }
+      } else {
+        if (settlingTimer) {
+          clearTimeout(settlingTimer);
+          settlingTimer = null;
+        }
+        isSettledPaused = false;
+      }
+
+      if (shouldAnimate && isTabVisible && !isSettledPaused) {
+        animationFrameId = requestAnimationFrame(render);
+      }
+    };
+
+    // Wake up render loop if blackHoleState changes back to active
+    const wakeUpRender = () => {
+      isSettledPaused = false;
+      if (settlingTimer) {
+        clearTimeout(settlingTimer);
+        settlingTimer = null;
+      }
+      if (!animationFrameId && isTabVisible) {
         animationFrameId = requestAnimationFrame(render);
       }
     };
 
     // Initial render
-    render();
+    wakeUpRender();
+
+    // Listen to store changes specifically to wake render loop when unlocked or speaking
+    const unsubscribeStore = useEvahStore.subscribe((state, prevState) => {
+      if (state.blackHoleState !== prevState.blackHoleState) {
+        wakeUpRender();
+      }
+    });
 
     // Visibility change handler (zero GPU usage when tab is hidden)
     const handleVisibilityChange = () => {
       isTabVisible = !document.hidden;
-      if (isTabVisible && shouldAnimate && !animationFrameId) {
+      if (isTabVisible && shouldAnimate && !animationFrameId && !isSettledPaused) {
         animationFrameId = requestAnimationFrame(render);
       } else if (!isTabVisible && animationFrameId) {
         cancelAnimationFrame(animationFrameId);
@@ -278,9 +359,7 @@ export const SpaceAtmosphere: React.FC = () => {
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
         renderer.setSize(width, height);
-        if (!shouldAnimate) {
-          renderer.render(scene, camera);
-        }
+        wakeUpRender();
       }, 100);
     };
 
@@ -289,6 +368,8 @@ export const SpaceAtmosphere: React.FC = () => {
     // Cleanup
     return () => {
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      if (settlingTimer) clearTimeout(settlingTimer);
+      unsubscribeStore();
       window.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('resize', handleResize);

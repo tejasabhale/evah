@@ -4,7 +4,7 @@ import { useEvahStore } from '../../store/useEvahStore';
 import { HardDrive, CheckCircle2 } from 'lucide-react';
 
 export const StartupSequence: React.FC = () => {
-  const { bootSequenceFinished, setBootSequenceFinished } = useEvahStore();
+  const { bootSequenceFinished, setBootSequenceFinished, triggerSessionGreeting } = useEvahStore();
   const overlayRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLDivElement>(null);
   const subtitleRef = useRef<HTMLParagraphElement>(null);
@@ -18,6 +18,10 @@ export const StartupSequence: React.FC = () => {
       const tl = gsap.timeline({
         onComplete: () => {
           setBootSequenceFinished(true);
+          // 600ms breathing pause before the session greeting
+          setTimeout(() => {
+            triggerSessionGreeting();
+          }, 600);
         },
       });
 
@@ -55,7 +59,7 @@ export const StartupSequence: React.FC = () => {
     }, overlayRef);
 
     return () => ctx.revert();
-  }, [bootSequenceFinished, setBootSequenceFinished]);
+  }, [bootSequenceFinished, setBootSequenceFinished, triggerSessionGreeting]);
 
   if (bootSequenceFinished) return null;
 

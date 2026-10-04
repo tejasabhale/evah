@@ -1,5 +1,14 @@
 import { create } from 'zustand';
-import { NavigationTab, FileItem, VaultItem, NoteItem, SecurityActivity, SystemState } from '../types';
+import { 
+  NavigationTab, 
+  FileItem, 
+  VaultItem, 
+  NoteItem, 
+  SecurityActivity, 
+  SystemState 
+} from '../types';
+import { ttsService } from '../services/tts/ttsService';
+import { SessionEventType, BlackHoleState } from '../services/tts/types';
 
 const INITIAL_FILES: FileItem[] = [
   {
@@ -180,9 +189,9 @@ EVAH prioritizes serenity and operational clarity.
 
 - [x] Integrate lightweight Lenis smooth inertia on workspace lists
 - [x] Coordinated GSAP emergency lock sequence when USB drive is unseated
+- [x] Hidden bottom dock with bottom-edge proximity reveal
+- [x] Local Kokoro-82M TTS with female voice af_heart
 - [ ] Direct Bluetooth LE proximity beacon for hands-free auto-pause
-- [ ] Offline local RAG memory index running 1-bit quantized llama.cpp
-- [ ] Monochromatic status bar mode for ultra-dim nighttime environments
 `
   },
   {
@@ -259,177 +268,303 @@ interface EvahExtendedStore extends SystemState {
   deleteVaultItem: (id: string) => void;
 }
 
-export const useEvahStore = create<EvahExtendedStore>((set, get) => ({
-  // Core system states
-  usbConnected: true,
-  isVaultLocked: true,
-  isSessionLocked: false,
-  securityMode: 'protected',
-  
-  // UI states
-  activeTab: 'home',
-  sidebarCollapsed: false,
-  aiPanelOpen: false,
-  commandPaletteOpen: false,
-  bootSequenceFinished: false,
-  
-  // Settings
-  backgroundIntensity: 85,
-  reducedMotion: false,
-  autoLockMinutes: 5,
-  
-  // Content states
-  activeNoteId: 'n1',
-  browserUrl: 'https://docs.evah.local/architecture',
-  searchQuery: '',
-  
-  // Data
-  files: INITIAL_FILES,
-  vaultItems: INITIAL_VAULT,
-  notes: INITIAL_NOTES,
-  activities: INITIAL_ACTIVITIES,
+export const useEvahStore = create<EvahExtendedStore>((set, get) => {
+  // Wire ttsService listeners to keep store status updated without high-frequency polling
+  ttsService.onStatusChange((status) => {
+    set({ ttsStatus: status });
+    if (status === 'speaking') {
+      set({ blackHoleState: 'speaking' });
+    } else if (status === 'idle') {
+      const current = get().blackHoleState;
+      if (current === 'speaking' || current === 'greeting') {
+        set({ blackHoleState: 'idle' });
+      }
+    }
+  });
 
-  // Actions
-  setActiveTab: (tab) => set({ activeTab: tab }),
-  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
-  toggleAiPanel: () => set((state) => ({ aiPanelOpen: !state.aiPanelOpen })),
-  setAiPanelOpen: (open) => set({ aiPanelOpen: open }),
-  setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
-  
-  unlockVault: (passphrase: string) => {
-    // Standard mock pass or anything with >= 3 chars
-    if (passphrase.trim().length >= 3) {
-      set({ isVaultLocked: false });
+  ttsService.onDeviceChange(({ device, dtype }) => {
+    set({ ttsDevice: device, ttsDtype: dtype });
+  });
+
+  ttsService.onAutoplayPendingChange((pending) => {
+    set({ voiceAutoplayPending: pending });
+  });
+
+  return {
+    // Core system states
+    usbConnected: true,
+    isVaultLocked: true,
+    isSessionLocked: false,
+    securityMode: 'protected',
+
+    // Audio & Black Hole States
+    blackHoleState: 'idle',
+    hasGreetedThisSession: false,
+    voiceResponsesEnabled: true,
+    voiceSpeed: 1.0,
+    voiceVolume: 1.0,
+    ttsDevice: 'wasm',
+    ttsDtype: 'q8',
+    ttsStatus: 'idle',
+    voiceAutoplayPending: false,
+    
+    // UI states
+    activeTab: 'home',
+    sidebarCollapsed: false,
+    aiPanelOpen: false,
+    commandPaletteOpen: false,
+    bootSequenceFinished: false,
+    
+    // Settings
+    backgroundIntensity: 85,
+    reducedMotion: false,
+    autoLockMinutes: 5,
+    
+    // Content states
+    activeNoteId: 'n1',
+    browserUrl: 'https://docs.evah.local/architecture',
+    searchQuery: '',
+    
+    // Data
+    files: INITIAL_FILES,
+    vaultItems: INITIAL_VAULT,
+    notes: INITIAL_NOTES,
+    activities: INITIAL_ACTIVITIES,
+
+    // Actions
+    setActiveTab: (tab) => set({ activeTab: tab }),
+    toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+    setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+    toggleAiPanel: () => set((state) => ({ aiPanelOpen: !state.aiPanelOpen })),
+    setAiPanelOpen: (open) => set({ aiPanelOpen: open }),
+    setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+    
+    unlockVault: (passphrase: string) => {
+      if (passphrase.trim().length >= 3) {
+        set({ isVaultLocked: false });
+        get().addActivity({
+          action: 'Vault opened',
+          details: 'Unlocked with user passphrase',
+          status: 'success'
+        });
+        return true;
+      }
+      return false;
+    },
+    
+    lockVault: () => {
+      set({ isVaultLocked: true });
       get().addActivity({
-        action: 'Vault opened',
-        details: 'Unlocked with user passphrase',
+        action: 'Vault locked',
+        details: 'Encryption keys evicted from RAM',
+        status: 'info'
+      });
+    },
+    
+    // Native-ready session event handler
+    handleSessionEvent: (event: SessionEventType) => {
+      switch (event) {
+        case 'USB_DISCONNECTED': {
+          ttsService.cleanup();
+          set({ 
+            usbConnected: false, 
+            isVaultLocked: true, 
+            isSessionLocked: true,
+            blackHoleState: 'disconnected'
+          });
+          get().addActivity({
+            action: 'USB Disconnected',
+            details: 'Media unseated. Session locked & memory zeroed.',
+            status: 'warning'
+          });
+          break;
+        }
+
+        case 'SESSION_LOCK': {
+          ttsService.cleanup();
+          set({ 
+            isSessionLocked: true,
+            blackHoleState: 'locked'
+          });
+          get().addActivity({
+            action: 'Session Locked',
+            details: 'Inactivity or manual lock engaged',
+            status: 'info'
+          });
+          break;
+        }
+
+        case 'USB_CONNECTED': {
+          ttsService.init();
+          set({ 
+            usbConnected: true,
+            isSessionLocked: false,
+            hasGreetedThisSession: false,
+            blackHoleState: 'idle'
+          });
+          get().addActivity({
+            action: 'USB Connected',
+            details: 'SanDisk Ultra Fit re-mounted successfully',
+            status: 'success'
+          });
+          // Trigger returning greeting on USB reconnect
+          setTimeout(() => {
+            get().triggerSessionGreeting();
+          }, 400);
+          break;
+        }
+
+        case 'SESSION_UNLOCK': {
+          ttsService.init();
+          set({ 
+            isSessionLocked: false,
+            blackHoleState: 'idle'
+          });
+          get().addActivity({
+            action: 'Session Unlocked',
+            details: 'Master passphrase verified',
+            status: 'success'
+          });
+          break;
+        }
+      }
+    },
+
+    toggleUsbConnection: () => {
+      const isConn = get().usbConnected;
+      if (isConn) {
+        get().handleSessionEvent('USB_DISCONNECTED');
+      } else {
+        get().handleSessionEvent('USB_CONNECTED');
+      }
+    },
+
+    setUsbConnected: (connected: boolean) => {
+      if (connected) {
+        get().handleSessionEvent('USB_CONNECTED');
+      } else {
+        get().handleSessionEvent('USB_DISCONNECTED');
+      }
+    },
+
+    unlockSession: () => get().handleSessionEvent('SESSION_UNLOCK'),
+    lockSession: () => get().handleSessionEvent('SESSION_LOCK'),
+
+    triggerSessionGreeting: () => {
+      // Strictly once per session
+      if (get().hasGreetedThisSession) return;
+      set({ hasGreetedThisSession: true });
+
+      const isFirstSetup = localStorage.getItem('evah_setup_done') === null;
+      let text = '';
+
+      if (isFirstSetup) {
+        text = 'Welcome to EVAH. Your private environment is ready.';
+        try {
+          localStorage.setItem('evah_setup_done', 'true');
+        } catch {}
+      } else {
+        const hour = new Date().getHours();
+        if (hour >= 5 && hour < 12) {
+          text = 'Good morning. EVAH is ready.';
+        } else if (hour >= 12 && hour < 18) {
+          text = 'Good afternoon. EVAH is ready.';
+        } else {
+          text = 'Good evening. Your session is ready.';
+        }
+      }
+
+      if (get().voiceResponsesEnabled) {
+        ttsService.speak(text, 'af_heart', get().voiceSpeed).catch(() => {});
+      }
+    },
+
+    setBlackHoleState: (state) => set({ blackHoleState: state }),
+    setVoiceResponsesEnabled: (enabled) => set({ voiceResponsesEnabled: enabled }),
+    setVoiceSpeed: (speed) => set({ voiceSpeed: speed }),
+    setVoiceVolume: (volume) => set({ voiceVolume: volume }),
+    setHasGreetedThisSession: (greeted) => set({ hasGreetedThisSession: greeted }),
+
+    setSecurityMode: (mode) => {
+      set({ securityMode: mode });
+      get().addActivity({
+        action: `Security mode changed`,
+        details: `Switched to ${mode.toUpperCase()} profile`,
+        status: mode === 'isolated' ? 'warning' : 'info'
+      });
+    },
+    
+    setBootSequenceFinished: (finished) => set({ bootSequenceFinished: finished }),
+    setActiveNoteId: (id) => set({ activeNoteId: id }),
+    setBrowserUrl: (url) => set({ browserUrl: url }),
+    setSearchQuery: (q) => set({ searchQuery: q }),
+    setBackgroundIntensity: (val) => set({ backgroundIntensity: val }),
+    setReducedMotion: (val) => set({ reducedMotion: val }),
+    
+    addActivity: (activity) => set((state) => ({
+      activities: [
+        {
+          ...activity,
+          id: 'act_' + Date.now(),
+          timestamp: 'Just now'
+        },
+        ...state.activities.slice(0, 19)
+      ]
+    })),
+
+    updateNoteContent: (id, content) => set((state) => ({
+      notes: state.notes.map((n) => 
+        n.id === id 
+          ? { ...n, content, modified: 'Just now' } 
+          : n
+      )
+    })),
+
+    createNote: (category) => {
+      const newId = 'n_' + Date.now();
+      const newNote: NoteItem = {
+        id: newId,
+        title: 'Untitled Note',
+        category,
+        content: '# Untitled Note\n\nStart typing your private note here...',
+        modified: 'Just now'
+      };
+      set((state) => ({
+        notes: [newNote, ...state.notes],
+        activeNoteId: newId
+      }));
+      get().addActivity({
+        action: 'Note created',
+        details: `Created new note in ${category}`,
+        status: 'info'
+      });
+    },
+
+    addVaultItem: (item) => {
+      const newItem: VaultItem = {
+        ...item,
+        id: 'v_' + Date.now(),
+        lastAccessed: 'Just now'
+      };
+      set((state) => ({
+        vaultItems: [newItem, ...state.vaultItems]
+      }));
+      get().addActivity({
+        action: 'Secret stored',
+        details: `Added ${item.title} to encrypted vault`,
         status: 'success'
       });
-      return true;
-    }
-    return false;
-  },
-  
-  lockVault: () => {
-    set({ isVaultLocked: true });
-    get().addActivity({
-      action: 'Vault locked',
-      details: 'Encryption keys evicted from RAM',
-      status: 'info'
-    });
-  },
-  
-  toggleUsbConnection: () => {
-    const isConn = get().usbConnected;
-    if (isConn) {
-      // Disconnect
-      set({ 
-        usbConnected: false, 
-        isVaultLocked: true, 
-        isSessionLocked: true 
-      });
+    },
+
+    deleteVaultItem: (id) => {
+      set((state) => ({
+        vaultItems: state.vaultItems.filter((i) => i.id !== id)
+      }));
       get().addActivity({
-        action: 'USB Disconnected',
-        details: 'Media unseated. Session locked & memory zeroed.',
+        action: 'Secret shredded',
+        details: 'Item securely scrubbed from storage',
         status: 'warning'
       });
-    } else {
-      // Reconnect
-      set({ 
-        usbConnected: true,
-        isSessionLocked: false
-      });
-      get().addActivity({
-        action: 'USB Connected',
-        details: 'SanDisk Ultra Fit re-mounted successfully',
-        status: 'success'
-      });
     }
-  },
-
-  setUsbConnected: (connected: boolean) => set({ usbConnected: connected }),
-  unlockSession: () => set({ isSessionLocked: false }),
-  lockSession: () => set({ isSessionLocked: true }),
-  setSecurityMode: (mode) => {
-    set({ securityMode: mode });
-    get().addActivity({
-      action: `Security mode changed`,
-      details: `Switched to ${mode.toUpperCase()} profile`,
-      status: mode === 'isolated' ? 'warning' : 'info'
-    });
-  },
-  
-  setBootSequenceFinished: (finished) => set({ bootSequenceFinished: finished }),
-  setActiveNoteId: (id) => set({ activeNoteId: id }),
-  setBrowserUrl: (url) => set({ browserUrl: url }),
-  setSearchQuery: (q) => set({ searchQuery: q }),
-  setBackgroundIntensity: (val) => set({ backgroundIntensity: val }),
-  setReducedMotion: (val) => set({ reducedMotion: val }),
-  
-  addActivity: (activity) => set((state) => ({
-    activities: [
-      {
-        ...activity,
-        id: 'act_' + Date.now(),
-        timestamp: 'Just now'
-      },
-      ...state.activities.slice(0, 19)
-    ]
-  })),
-
-  updateNoteContent: (id, content) => set((state) => ({
-    notes: state.notes.map((n) => 
-      n.id === id 
-        ? { ...n, content, modified: 'Just now' } 
-        : n
-    )
-  })),
-
-  createNote: (category) => {
-    const newId = 'n_' + Date.now();
-    const newNote: NoteItem = {
-      id: newId,
-      title: 'Untitled Note',
-      category,
-      content: '# Untitled Note\n\nStart typing your private note here...',
-      modified: 'Just now'
-    };
-    set((state) => ({
-      notes: [newNote, ...state.notes],
-      activeNoteId: newId
-    }));
-    get().addActivity({
-      action: 'Note created',
-      details: `Created new note in ${category}`,
-      status: 'info'
-    });
-  },
-
-  addVaultItem: (item) => {
-    const newItem: VaultItem = {
-      ...item,
-      id: 'v_' + Date.now(),
-      lastAccessed: 'Just now'
-    };
-    set((state) => ({
-      vaultItems: [newItem, ...state.vaultItems]
-    }));
-    get().addActivity({
-      action: 'Secret stored',
-      details: `Added ${item.title} to encrypted vault`,
-      status: 'success'
-    });
-  },
-
-  deleteVaultItem: (id) => {
-    set((state) => ({
-      vaultItems: state.vaultItems.filter((i) => i.id !== id)
-    }));
-    get().addActivity({
-      action: 'Secret shredded',
-      details: 'Item securely scrubbed from storage',
-      status: 'warning'
-    });
-  }
-}));
+  };
+});

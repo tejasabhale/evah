@@ -1,3 +1,5 @@
+import { BlackHoleState, TTSDevice, TTSDtype, TTSStatus, SessionEventType } from '../services/tts/types';
+
 export type NavigationTab = 
   | 'home' 
   | 'files' 
@@ -53,6 +55,17 @@ export interface SystemState {
   isSessionLocked: boolean;
   securityMode: 'protected' | 'airgap' | 'isolated';
   
+  // Audio & Black Hole States
+  blackHoleState: BlackHoleState;
+  hasGreetedThisSession: boolean;
+  voiceResponsesEnabled: boolean;
+  voiceSpeed: number;
+  voiceVolume: number;
+  ttsDevice: TTSDevice;
+  ttsDtype: TTSDtype;
+  ttsStatus: TTSStatus;
+  voiceAutoplayPending: boolean;
+  
   // UI states
   activeTab: NavigationTab;
   sidebarCollapsed: boolean;
@@ -83,6 +96,13 @@ export interface SystemState {
   setUsbConnected: (connected: boolean) => void;
   unlockSession: () => void;
   lockSession: () => void;
+  handleSessionEvent: (event: SessionEventType) => void;
+  triggerSessionGreeting: () => void;
+  setBlackHoleState: (state: BlackHoleState) => void;
+  setVoiceResponsesEnabled: (enabled: boolean) => void;
+  setVoiceSpeed: (speed: number) => void;
+  setVoiceVolume: (volume: number) => void;
+  setHasGreetedThisSession: (greeted: boolean) => void;
   setSecurityMode: (mode: 'protected' | 'airgap' | 'isolated') => void;
   setBootSequenceFinished: (finished: boolean) => void;
   setActiveNoteId: (id: string) => void;

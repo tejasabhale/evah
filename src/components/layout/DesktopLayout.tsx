@@ -3,12 +3,12 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLenisScroll } from '../../hooks/useLenisScroll';
 import { TopBar } from './TopBar';
-import { LeftSidebar } from './LeftSidebar';
 import { SpaceAtmosphere } from '../background/SpaceAtmosphere';
 import { AskEvahPanel } from '../ai/AskEvahPanel';
 import { CommandPalette } from '../common/CommandPalette';
 import { StartupSequence } from '../sequences/StartupSequence';
 import { LockOverlay } from '../sequences/LockOverlay';
+import { BottomDock } from '../dock/BottomDock';
 
 export const DesktopLayout: React.FC = () => {
   const location = useLocation();
@@ -30,15 +30,12 @@ export const DesktopLayout: React.FC = () => {
       {/* 4. Top Bar (Persistent desktop bar) */}
       <TopBar />
 
-      {/* 5. Middle Workspace: Left Sidebar + Main Content (Persistent shell) */}
+      {/* 5. Middle Workspace: Full-width Main Content */}
       <div className="relative z-10 flex-1 flex overflow-hidden">
-        {/* Left Sidebar */}
-        <LeftSidebar />
-
         {/* Main Workspace with Mac-style smooth Lenis scrolling */}
         <main
           ref={containerRef}
-          className="flex-1 overflow-y-auto relative outline-none"
+          className="flex-1 overflow-y-auto relative outline-none pb-12"
           tabIndex={-1}
         >
           <div className="min-h-full flex flex-col">
@@ -58,10 +55,13 @@ export const DesktopLayout: React.FC = () => {
         </main>
       </div>
 
-      {/* 6. Ask EVAH Floating Drawer */}
+      {/* 6. Centered Floating Auto-hiding Bottom Dock */}
+      <BottomDock />
+
+      {/* 7. Ask EVAH Floating Drawer */}
       <AskEvahPanel />
 
-      {/* 7. Command Palette Modal (Super+K / ⌘K) */}
+      {/* 8. Command Palette Modal (Super+K / ⌘K) */}
       <CommandPalette />
     </div>
   );
